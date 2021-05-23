@@ -154,7 +154,7 @@ def main():
         disks_future = executor.submit(get_disk_info)
 
     host_info["host"] = platform.node()
-    host_info["disks"] = (disks_future.result())
+    host_info["disks"] = disks_future.result()
     host_info["cpus"] = cpus_future.result()
     host_info.update(mem_future.result())
     host_info.update(model_future.result())
