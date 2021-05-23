@@ -1,6 +1,7 @@
 #! /usr/bin/python3
 
 import concurrent.futures
+import logging
 import platform
 import pprint
 import subprocess
@@ -157,8 +158,6 @@ def main():
     host_info["cpus"] = cpus_future.result()
     host_info.update(mem_future.result())
     host_info.update(model_future.result())
-
-    pprint.pprint(host_info)
 
     return 0
 
