@@ -7,6 +7,18 @@ import pprint
 import subprocess
 
 
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+console_log = logging.StreamHandler()
+console_log.setLevel(logging.INFO)
+
+formatter = logging.Formatter("%(levelname)s: %(message)s")
+
+console_log.setFormatter(formatter)
+logger.addHandler(console_log)
+
+
 def get_model_info():
     model_info = dict()
 
@@ -154,10 +166,16 @@ def main():
         disks_future = executor.submit(get_disk_info)
 
     host_info["host"] = platform.node()
+    logger.info("Gathering disk info")
     host_info["disks"] = disks_future.result()
+    logger.info("Gathering CPU info")
     host_info["cpus"] = cpus_future.result()
+    logger.info("Gathering memory info")
     host_info.update(mem_future.result())
+    logger.info("Gathering platform info")
     host_info.update(model_future.result())
+    
+    logger.info(host_info)
 
     return 0
 
