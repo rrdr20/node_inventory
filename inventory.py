@@ -113,7 +113,7 @@ def get_disk_info():
                 "--list",
                 "--nodeps",
                 "--exclude",
-                "7",
+                "7,11",
                 "--output",
                 "KNAME,HCTL,ROTA,SIZE",
             ],
