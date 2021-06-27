@@ -4,7 +4,9 @@ import concurrent.futures
 import logging
 import platform
 import pprint
+import redis
 import subprocess
+import time
 
 
 logger = logging.getLogger(__name__)
@@ -158,26 +160,66 @@ def get_disk_info():
     return disk_info
 
 
+def get_disk_temps(disk: dict):
+    temp = None
+
+    results = subprocess.run(
+        ["smartctl", "-A", f"/dev/{disk['name']}"],
+        capture_output=True,
+        text=True,
+    ).stdout.split("\n")
+
+    if disk["name"].startswith("nvme"):
+        for line in results:
+            if line.startswith("Temperature:"):
+                temp = line.split()[1].strip()
+    else:
+        for line in results:
+            if line.startswith("194 Temperature"):
+                temp = line.split()[9].strip()
+
+    return f"{disk['name']} {temp}"
+
+
 def main():
-    host_info = dict()
+    try:
+        host_info = dict()
+        host_info["host"] = platform.node()
 
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        cpus_future = executor.submit(get_cpu_info)
-        mem_future = executor.submit(get_mem_info)
-        model_future = executor.submit(get_model_info)
-        disks_future = executor.submit(get_disk_info)
+        logger.info("Connecting to Redis server...")
+        r = redis.Redis(host="infra.rrdrlabs.net", port=6379, db=0)
+        r.setnx(f"{host_info['host']}", "connected")
+        logger.info("Connected to Redis server.")
 
-    host_info["host"] = platform.node()
-    logger.info("Gathering disk info")
-    host_info["disks"] = disks_future.result()
-    logger.info("Gathering CPU info")
-    host_info["cpus"] = cpus_future.result()
-    logger.info("Gathering memory info")
-    host_info.update(mem_future.result())
-    logger.info("Gathering platform info")
-    host_info.update(model_future.result())
-    
-    logger.info(host_info)
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            cpus_future = executor.submit(get_cpu_info)
+            mem_future = executor.submit(get_mem_info)
+            model_future = executor.submit(get_model_info)
+            disks_future = executor.submit(get_disk_info)
+
+        logger.info("Gathering disk info.")
+        host_info["disks"] = disks_future.result()
+
+        logger.info("Gathering CPU info.")
+        host_info["cpus"] = cpus_future.result()
+
+        logger.info("Gathering memory info.")
+        host_info.update(mem_future.result())
+
+        logger.info("Gathering platform info.")
+        host_info.update(model_future.result())
+
+        logger.info(host_info)
+
+        while True:
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                temp_futures = executor.map(get_disk_temps, host_info["disks"])
+                temp_list = list(temp_futures)
+                print("|".join(temp_list))
+                time.sleep(5)
+
+    except Exception as e:
+        logger.error(e)
 
     return 0
 
