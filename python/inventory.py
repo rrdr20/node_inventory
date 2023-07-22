@@ -1,13 +1,12 @@
-#! /usr/bin/python3
+"""Collects node inventory and posts to Redis."""
 
 import concurrent.futures
 import logging
 import platform
-import pprint
-import redis
 import subprocess
 import time
 
+import redis
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -22,25 +21,32 @@ logger.addHandler(console_log)
 
 
 def get_model_info():
-    model_info = dict()
+    """Collects the node model and serial number from system files and returns
+    the map.
+    """
+    model_info = {}
 
-    with open("/sys/class/dmi/id/product_name", "r") as prod_name:
+    with open("/sys/class/dmi/id/product_name", "r", encoding="utf-8") as prod_name:
         model_info.update(model=prod_name.readline().splitlines()[0].strip())
 
-    with open("/sys/class/dmi/id/product_serial", "r") as prod_serial:
+    with open("/sys/class/dmi/id/product_serial", "r", encoding="utf-8") as prod_serial:
         model_info.update(serial=prod_serial.readline().splitlines()[0].strip())
 
     return model_info
 
 
 def get_cpu_info():
-    cpu_info = list()
+    """Reads the output of lscpu and parses thread, core, socket and model info
+    and returns the map.
+    """
+    cpu_info = []
 
     results = (
         subprocess.run(
             ["lscpu"],
             capture_output=True,
             text=True,
+            check=True,
         )
         .stdout.strip()
         .split("\n")
@@ -70,8 +76,9 @@ def get_cpu_info():
 
 
 def get_mem_info():
+    """Parses online memory from the lsmem command and returns the map."""
     results = (
-        subprocess.run(["lsmem"], capture_output=True, text=True)
+        subprocess.run(["lsmem"], capture_output=True, text=True, check=True)
         .stdout.strip()
         .split("\n")
     )
@@ -88,12 +95,16 @@ def get_mem_info():
 
 
 def get_disk_serial(disk):
+    """Runs smartctl with the disk specified, parses the serial number of the
+    disk and returns a tuple of the disk and the serial number.
+    """
     serial = None
 
     results = subprocess.run(
         ["smartctl", "-i", f"/dev/{disk}"],
         capture_output=True,
         text=True,
+        check=True,
     ).stdout.split("\n")
 
     for line in results:
@@ -104,8 +115,11 @@ def get_disk_serial(disk):
 
 
 def get_disk_info():
-    disk_info = list()
-    disk_list = list()
+    """Collects the disk information from the host using the lsblk and smartctl
+    commands and returns a map.
+    """
+    disk_info = []
+    disk_list = []
 
     lsblk_list = (
         subprocess.run(
@@ -121,6 +135,7 @@ def get_disk_info():
             ],
             capture_output=True,
             text=True,
+            check=True,
         )
         .stdout.strip()
         .split("\n")
@@ -129,7 +144,7 @@ def get_disk_info():
     for item in lsblk_list:
         disk_spec = item.split()
 
-        disk = dict()
+        disk = {}
 
         disk_list.append(disk_spec[0])
 
@@ -161,12 +176,16 @@ def get_disk_info():
 
 
 def get_disk_temps(disk: dict):
+    """Runs the smartctl command on the disk and parses the temperature from
+    the output. Returns a formatted string.
+    """
     temp = None
 
     results = subprocess.run(
         ["smartctl", "-A", f"/dev/{disk['name']}"],
         capture_output=True,
         text=True,
+        check=True,
     ).stdout.split("\n")
 
     if disk["name"].startswith("nvme"):
@@ -182,13 +201,16 @@ def get_disk_temps(disk: dict):
 
 
 def main():
+    """Connects to the Redis server and sets info based on the information
+    collected from the node.
+    """
     try:
-        host_info = dict()
+        host_info = {}
         host_info["host"] = platform.node()
 
         logger.info("Connecting to Redis server...")
-        r = redis.Redis(host="infra.rrdrlabs.net", port=6379, db=0)
-        r.setnx(f"{host_info['host']}", "connected")
+        redis_conn = redis.Redis(host="192.168.10.6", port=6379, db=0)
+        redis_conn.setnx(f"{host_info['host']}", "connected")
         logger.info("Connected to Redis server.")
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
@@ -218,8 +240,8 @@ def main():
                 print("|".join(temp_list))
                 time.sleep(5)
 
-    except Exception as e:
-        logger.error(e)
+    except Exception as err:
+        logger.error(err)
 
     return 0
 
