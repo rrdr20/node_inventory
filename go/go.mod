@@ -1,3 +1,3 @@
-module github.com/rrdr20/node_inventory/go
+module github.com/rrdr20/smbtest
 
 go 1.20

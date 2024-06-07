@@ -8,6 +8,7 @@ version 0.0
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/binary"
 	"errors"
@@ -19,15 +20,18 @@ import (
 const (
 	sysfsEntrypoint = "/sys/firmware/dmi/tables/smbios_entry_point"
 	sysfsDMI        = "/sys/firmware/dmi/tables/DMI"
+	headerLen       = 4
 )
 
 var (
 	anchor             = []byte("_SM_")
 	intermediateAnchor = []byte("_DMI_")
+	terminater         = []byte{0x00, 0x00}
 )
 
 type EntryPoint struct {
 	Anchor                string // Anchor string (_SM_)
+	IntermediateAnchor    string // size of 5 (_DMI_)
 	Checksum              uint8
 	Length                uint8
 	Major                 uint8
@@ -35,7 +39,6 @@ type EntryPoint struct {
 	MaxStructureSize      uint16
 	EntryPointRevision    uint8   // if this value is 0 then next 5 bytes are set to 0
 	FormattedArea         [5]byte // set to 0 if EntryPointRevision is set to 0
-	IntermediateAnchor    string  // size of 5 (_DMI_)
 	IntermediateChecksum  uint8
 	StructureTableLength  uint16
 	StructureTableAddress uint32
@@ -43,9 +46,31 @@ type EntryPoint struct {
 	BCDRevision           uint8
 }
 
+type Header struct {
+	Type   uint8
+	Length uint8
+	Handle uint16
+}
+
+type Structure struct {
+	Formatterd []byte
+	Strings    []string
+	Header     Header
+}
+
+type SmTable struct {
+	Structures []Structure
+}
+
 func main() {
 	// If the files do not exist do not proceed, exit with error
 	_, err := os.Stat(sysfsEntrypoint)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
+	_, err = os.Stat(sysfsDMI)
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
@@ -65,6 +90,15 @@ func main() {
 		fmt.Println(err)
 		os.Exit(1)
 	}
+
+	dmiTablef, err := os.Open(sysfsDMI)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	defer dmiTablef.Close()
+
+	parseDmiTable(dmiTablef)
 
 	fmt.Println(*ep)
 }
@@ -109,15 +143,74 @@ func parseSmbEntryPoint(smbepf io.Reader) (*EntryPoint, error) {
 	return &ep, nil
 }
 
+func parseDmiTable(dmiTablef io.ReadCloser) error {
+	br := bufio.NewReader(dmiTablef)
+
+	for {
+		buf := make([]byte, headerLen)
+		if _, err := io.ReadFull(br, buf); err != nil {
+			break
+		}
+
+		h := Header{
+			Type:   buf[0],
+			Length: buf[1],
+			Handle: binary.LittleEndian.Uint16(buf[2:4]),
+		}
+
+		length := h.Length - headerLen
+
+		buf = make([]byte, length)
+		if _, err := io.ReadFull(br, buf); err != nil {
+			return errors.New("unable to read dmi data")
+		}
+
+		s := Structure{
+			Header:     h,
+			Formatterd: buf,
+			Strings:    []string{},
+		}
+
+		for {
+			term, err := br.Peek(2)
+			if err != nil {
+				return errors.New("unable to read dmi data")
+			}
+
+			if bytes.Equal(term, terminater) {
+				br.Discard(2)
+				break
+			} else {
+				raw, err := br.ReadBytes(0x00)
+				if err != nil {
+					return errors.New("read err parsing string")
+				}
+				ss := bytes.TrimRight(raw, "\x00")
+				s.Strings = append(s.Strings, string(ss))
+				peek, err := br.Peek(1)
+				if err != nil {
+					return errors.New("unable to read dmi data")
+				}
+				if bytes.Equal(peek, []byte{0x00}) {
+					br.Discard(1)
+					break
+				}
+			}
+		}
+
+		fmt.Printf("%+v\n", s)
+	}
+
+	return nil
+}
+
 func checksum(checksum uint8, idx int, b []byte) error {
 	chk := checksum
 	for i := range b {
 		if i == idx {
 			continue
 		}
-
 		chk += b[i]
-
 	}
 
 	if chk != 0 {
